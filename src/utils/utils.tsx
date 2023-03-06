@@ -1,4 +1,4 @@
-import { AssetPair } from '../Components/AssetList/AssetListSearch/AssetListSearch';
+import { AssetPair } from '../Components/AssetSearch/AssetSearch';
 
 export const getObjectPropertyByIndex = (obj: any, path: string) => {
   try {
@@ -15,7 +15,7 @@ export const getObjectPropertyByIndex = (obj: any, path: string) => {
   }
 };
 
-export const assetPairToSymbols = (assetPair: string): AssetPair => {
+export const currencySymbolToAssetPair = (assetPair: string): AssetPair => {
   const pairs = assetPair.split('/');
 
   return {
@@ -31,7 +31,7 @@ export const assetPairURLToSymbol = (assetPair: string): string => {
   return pair;
 };
 
-export const assetSymbolToURLPair = (assetPair: string): string => {
+export const assetPairSymbolToURL = (assetPair: string): string => {
   const pair = assetPair.replace('/', '_');
 
   return pair;
@@ -41,4 +41,14 @@ export const assetSymbolToProiderConvention = (assetPair: string): string => {
   const pair = assetPair.replaceAll(/\//gi, '');
 
   return pair;
+};
+
+export const replacePathVairables = (
+  path: string,
+  symbol: string,
+  limit: number
+) => {
+  return path
+    .replaceAll('{symbol}', symbol)
+    .replaceAll('{limit}', limit.toString());
 };

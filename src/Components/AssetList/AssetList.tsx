@@ -1,21 +1,30 @@
-import { FC, Key, useEffect, useState } from 'react';
+import { FC, Key, useCallback, useEffect } from 'react';
 import { Button, Empty, Modal, Skeleton, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useParams, useNavigate, useLocation, NavLink } from 'react-router-dom';
-import ExchangeListSearch from './AssetListSearch/AssetListSearch';
-import AssetTradesList from './AssetTradesList/AssetTradesList';
+import { useDispatch, useSelector } from 'react-redux';
+import ExchangeListSearch, { AssetPair } from '../AssetSearch/AssetSearch';
+import AssetTradesList from '../AssetTradesList/AssetTradesList';
 import axiosInstance from '../../axios-instance';
 import {
   assetPairURLToSymbol,
   assetSymbolToProiderConvention,
-  assetSymbolToURLPair,
+  assetPairSymbolToURL,
   getObjectPropertyByIndex,
 } from '../../utils/utils';
+import {
+  setAssetListItems,
+  setExchange,
+  setIsModalOpen,
+  setIsLoading,
+  setExchangeList,
+  setIsSupported,
+} from '../../redux/assetListSlice';
+import { RootState } from '../../redux/store/store';
 
 export const DEFAULT_REQUEST_TIMEOUT = 5000;
-const DEFAULT_CURRENCY = 'BTC/USDT';
 
-export interface Exchange {
+export interface ExchangeData {
   id: string;
   name: string;
   api: {
@@ -29,7 +38,11 @@ export interface Exchange {
   };
 }
 
-const EXCHANGE_LIST_DATA: Exchange[] = [
+export interface Exchange extends ExchangeData {
+  isSupported?: boolean;
+}
+
+export const EXCHANGE_LIST_DATA: ExchangeData[] = [
   {
     id: '1',
     name: 'Binance',
@@ -46,8 +59,7 @@ const EXCHANGE_LIST_DATA: Exchange[] = [
         },
       },
       recentTrades: {
-        path: (symbol: string, limit?: number) =>
-          `trades?symbol=${symbol}&limit=${limit}`,
+        path: `trades?symbol={symbol}&limit={limit}`,
         case: 'upper',
         properties: {
           price: 'price',
@@ -74,8 +86,7 @@ const EXCHANGE_LIST_DATA: Exchange[] = [
         },
       },
       recentTrades: {
-        path: (symbol: string, limit?: number) =>
-          `trades/${symbol}?limit_trades=${limit}`,
+        path: `trades/{symbol}?limit_trades={limit}`,
         case: 'upper',
         properties: {
           price: 'price',
@@ -102,8 +113,7 @@ const EXCHANGE_LIST_DATA: Exchange[] = [
         },
       },
       recentTrades: {
-        path: (symbol: string, limit?: number) =>
-          `market/history/trade?symbol=${symbol}&size=${limit}`,
+        path: `market/history/trade?symbol={symbol}&size={limit}`,
         case: 'lower',
         data: 'data',
         properties: {
@@ -131,7 +141,7 @@ const EXCHANGE_LIST_DATA: Exchange[] = [
         },
       },
       recentTrades: {
-        path: (symbol: string) => `Trades?pair=${symbol}`,
+        path: 'Trades?pair={symbol}',
         case: 'upper',
         data: 'result[0]',
         properties: {
@@ -160,71 +170,66 @@ interface AssetListProps {
 }
 
 const AssetList: FC<AssetListProps> = ({ className = '' }) => {
+  const dispatch = useDispatch();
   const location = useLocation();
   const navigate = useNavigate();
   const paramsURL = useParams();
 
-  const [assetListItems, setAssetListItems] = useState<AssetListItem[]>([]);
-  const [currencySymbol, setCurrencySymbol] = useState<string>('');
-  const defaultPair: string = paramsURL.pair
+  useEffect(() => {
+    dispatch(setExchangeList(EXCHANGE_LIST_DATA));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const {
+    assetListItems,
+    currencySymbol,
+    exchange,
+    exchangeList,
+    isModalOpen,
+    isLoading,
+  } = useSelector((state: RootState) => state.assetListReducer);
+
+  const defaultCurrencySymbol: string = paramsURL.pair
     ? assetPairURLToSymbol(paramsURL.pair)
-    : DEFAULT_CURRENCY;
-  const [exchange, setExchange] = useState<Exchange | null>();
-  const [exchangeList, setExchangeList] =
-    useState<Exchange[]>(EXCHANGE_LIST_DATA);
+    : currencySymbol.symbol;
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const showModal = () => {
-    setIsModalOpen(true);
-  };
-
-  const handleCancel = () => {
-    // Close the AssetsTradesList modal `details` and redirect to the default pair.
-
-    setIsModalOpen(false);
-    const newUrl = paramsURL.pair || '/';
-    navigate(newUrl, {
-      replace: true,
-    });
-  };
-
-  const handleAssetPairsChange = (
-    symbol: string,
-    isSelectedAssetFound: boolean
-  ) => {
-    // Trigger change if the asset is found in the list.
-
-    if (isSelectedAssetFound) {
-      setCurrencySymbol(symbol);
-    }
-  };
-
-  const getAssetPriceBySymbol = (): void => {
+  const getAssetPriceBySymbol = useCallback((): void => {
     /**
      * Make requests for all exchanges and get the price for the selected asset pair.
      * Because the API's of the different exchanges are not consistent, the properties
      * of recived data have to be mapped to have unified interface.
      * Then mappings are described in EXCHANGE_LIST_DATA object.
-     *
-     * TODO: Should exclude requests to exchanges that do not have the selected asset pair.
-     * Now it's just a waste of resources to make API calls.
-     * TODO: Make functions pure.
      */
-    setIsLoading(true);
+
+    dispatch(setIsLoading(true));
+
     const symbolNormalized = `${assetSymbolToProiderConvention(
-      currencySymbol
+      currencySymbol.symbol
     )}`;
 
-    const exchangeRequests = exchangeList.map((exchangeData) => {
+    const exchangeRequests = exchangeList.map((exchangeListItem) => {
       const symbolCaseByExchange =
-        exchangeData.api.priceBySymbol.case === 'upper'
+        exchangeListItem.api.priceBySymbol.case === 'upper'
           ? symbolNormalized.toUpperCase()
           : symbolNormalized.toLowerCase();
 
+      /**
+       * TODO: Should exclude requests to exchanges that do not have the selected asset pair.
+       * This is "isSupported" property on exchange object.
+       * Now it's just a waste of resources to make API calls.
+      
+       * if (
+       *   exchangeListItem.isSupported ||
+       *   exchangeListItem.isSupported === undefined
+       * ) {
+       *   return axiosInstance.get(
+       *     `${exchangeListItem.api.url}${exchangeListItem.api.priceBySymbol.path}${symbolCaseByExchange}`
+       *   );
+       * }
+       * */
+
       return axiosInstance.get(
-        `${exchangeData.api.url}${exchangeData.api.priceBySymbol.path}${symbolCaseByExchange}`
+        `${exchangeListItem.api.url}${exchangeListItem.api.priceBySymbol.path}${symbolCaseByExchange}`
       );
     });
 
@@ -233,28 +238,89 @@ const AssetList: FC<AssetListProps> = ({ className = '' }) => {
     Promise.allSettled(exchangeRequests)
       .then((responses) => {
         responses.forEach((res: any, index) => {
+          const price = res.value
+            ? getObjectPropertyByIndex(
+                res.value.data,
+                exchangeList[index].api.priceBySymbol.properties.price
+              )
+            : null;
+          const isAssetPairSupported = Boolean(price);
+
+          dispatch(
+            setIsSupported({ index, isSupported: isAssetPairSupported })
+          );
+
           assetPriceItems.push({
             key: exchangeList[index].id,
             name: exchangeList[index].name,
-            price: res.value
-              ? getObjectPropertyByIndex(
-                  res.value.data,
-                  exchangeList[index].api.priceBySymbol.properties.price
-                )
-              : null,
-            symbol: currencySymbol,
+            price: price,
+            symbol: currencySymbol.symbol,
           });
         });
 
-        setAssetListItems(assetPriceItems);
+        dispatch(setAssetListItems(assetPriceItems));
       })
       .catch((error) => {
         console.log(error);
       })
       .finally(() => {
-        setIsLoading(false);
+        dispatch(setIsLoading(false));
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currencySymbol.symbol, exchangeList]);
+
+  const showModal = () => {
+    dispatch(setIsModalOpen(true));
   };
+
+  const handleCancel = () => {
+    // Close the AssetsTradesList modal `details` and redirect to the default pair.
+    dispatch(setIsModalOpen(false));
+    const newUrl = paramsURL.pair || '/';
+    navigate(newUrl, {
+      replace: true,
+    });
+  };
+
+  useEffect(() => {
+    /**
+     * If the asset pair is changed, the URL is updated and the price is requested.
+     * The price is requested every DEFAULT_REQUEST_TIMEOUT ms.
+     * The timer is cleared when the component is unmounted.
+     *
+     * TODO: Need to handle better setting default asset pair at app start.
+     * Currently it's start with the default asset pair and then it's changed to the one selected by URL.
+     * */
+
+    if (exchangeList.length) {
+      dispatch(setAssetListItems([]));
+
+      const newUrlSymbol = assetPairSymbolToURL(currencySymbol.symbol);
+      const newUrl = paramsURL.pair
+        ? location.pathname.replace(paramsURL.pair, newUrlSymbol)
+        : `${location.pathname}${'/'}${newUrlSymbol}`.replace(/\/\/+/g, '/'); // Replace double slashes with single slash.
+
+      navigate(newUrl, {
+        replace: true,
+      });
+
+      getAssetPriceBySymbol();
+
+      const getAssetPriceBySymbolTimer = setInterval(() => {
+        getAssetPriceBySymbol();
+      }, DEFAULT_REQUEST_TIMEOUT);
+
+      return () => {
+        clearInterval(getAssetPriceBySymbolTimer);
+      };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currencySymbol.symbol, exchangeList]); // Probably exchangeList should be here as well
+
+  const handleAssetPairsChange = (
+    newCurrencySymbol: AssetPair,
+    isExistingAssetPair: boolean
+  ) => {};
 
   const columnsAssetListTable: ColumnsType<AssetListItem> = [
     {
@@ -270,7 +336,7 @@ const AssetList: FC<AssetListProps> = ({ className = '' }) => {
       title: 'Price',
       dataIndex: 'price',
       align: 'right',
-      sorter: (a, b) => parseFloat(a.price) - parseFloat(b.price), // TODO: check if values arr corectly parsed,
+      sorter: (a, b) => parseFloat(a.price) - parseFloat(b.price),
       render: (price, exchangeListItem) => (
         <NavLink
           onClick={(e) => {
@@ -292,50 +358,15 @@ const AssetList: FC<AssetListProps> = ({ className = '' }) => {
   ];
 
   useEffect(() => {
-    if (currencySymbol) {
-      /**
-       * If the asset pair is changed, the URL is updated and the price is requested.
-       * The price is requested every DEFAULT_REQUEST_TIMEOUT ms.
-       * The timer is cleared when the component is unmounted.
-       * */
-
-      const newUrlSymbol = assetSymbolToURLPair(currencySymbol);
-      const newUrl = paramsURL.pair
-        ? location.pathname.replace(paramsURL.pair, newUrlSymbol)
-        : `${location.pathname}${
-            !location.pathname.endsWith('/') && '/'
-          }${newUrlSymbol}`;
-
-      navigate(newUrl, {
-        replace: true,
-      });
-
-      getAssetPriceBySymbol();
-
-      const getAssetPriceBySymbolTimer = setInterval(() => {
-        getAssetPriceBySymbol();
-      }, DEFAULT_REQUEST_TIMEOUT);
-
-      return () => {
-        clearInterval(getAssetPriceBySymbolTimer);
-      };
-    } else {
-      setIsLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currencySymbol]);
-
-  useEffect(() => {
     /**
      *  If the exchange is changed in the URL and it is existing one, the modal is opened.
      * */
-
     const exchangeData = exchangeList.find(
       (exchangeItem) => exchangeItem?.name === paramsURL.exchange
     );
 
     if (exchangeData) {
-      setExchange(exchangeData);
+      dispatch(setExchange(exchangeData));
       showModal();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -346,19 +377,16 @@ const AssetList: FC<AssetListProps> = ({ className = '' }) => {
       className={`asset-list grid grid-flow-row gap-2 items-end ${className}`}
     >
       <Modal
-        title="Trades List"
+        title={`Trades List - ${exchange?.name}`}
         open={isModalOpen}
         onOk={handleCancel}
         onCancel={handleCancel}
       >
-        {currencySymbol && exchange && (
-          <AssetTradesList currentSymbol={currencySymbol} exchange={exchange} />
-        )}
+        {currencySymbol && exchange && <AssetTradesList />}
       </Modal>
       <ExchangeListSearch
         className="place-self-end"
-        defaultPair={defaultPair}
-        exchange={EXCHANGE_LIST_DATA[0]}
+        defaultCurrencySymbol={defaultCurrencySymbol}
         onAssetPairChange={handleAssetPairsChange}
       />
       <Table

@@ -1,11 +1,19 @@
 import { FC, useEffect, useState } from 'react';
 import { AxiosResponse } from 'axios';
-import { SelectProps, AutoComplete, Input } from 'antd';
+import { AutoComplete, Input, SelectProps } from 'antd';
 import { LoadingOutlined } from '@ant-design/icons';
-import { Exchange } from '../AssetList';
-import axiosInstance from '../../../axios-instance';
-import { assetPairToSymbols } from '../../../utils/utils';
-import { AssetSymbolImg } from '../../AssetSymbolImg/AssetSymbolImg';
+import { useDispatch, useSelector } from 'react-redux';
+import { EXCHANGE_LIST_DATA } from '../AssetList/AssetList';
+import axiosInstance from '../../axios-instance';
+import { AssetSymbolImg } from '../AssetSymbolImg/AssetSymbolImg';
+import {
+  setIsLoading,
+  setIsSelectedExisting,
+  setAssetPairs,
+} from '../../redux/assetListSearchSlice';
+import { setCurrencySymbol } from '../../redux/assetListSlice';
+import { RootState } from '../../redux/store/store';
+import { currencySymbolToAssetPair } from '../../utils/utils';
 
 export interface AssetPair {
   symbol: string;
@@ -13,30 +21,38 @@ export interface AssetPair {
   quoteAsset: string;
 }
 
-interface AssetListSearchProps {
+interface AssetSearchProps {
   className?: string;
-  defaultPair: string;
-  exchange: Exchange;
-  onAssetPairChange?: (symbol: string, isSelectedIn: boolean) => void;
+  defaultCurrencySymbol: string;
+  onAssetPairChange?: (
+    currencySymbol: AssetPair,
+    isSelectedExisting: boolean
+  ) => void;
 }
 
-const AssetListSearch: FC<AssetListSearchProps> = ({
-  defaultPair,
+const AssetSearch: FC<AssetSearchProps> = ({
   className = '',
-  exchange,
+  defaultCurrencySymbol,
   onAssetPairChange = () => {},
 }) => {
-  const [assetPairs, setAssetPairs] = useState<AssetPair[]>([]);
-  const [currentAssetPair, setCurrentAssetPair] = useState<AssetPair>({
-    ...assetPairToSymbols(defaultPair),
-  });
+  const dispatch = useDispatch();
+  const { assetPairs, isSelectedExisting, isLoading } = useSelector(
+    (state: RootState) => state.assetListSearchReducer
+  );
+  const { currencySymbol } = useSelector(
+    (state: RootState) => state.assetListReducer
+  );
   const [options, setOptions] = useState<SelectProps<object>['options']>([]);
-  const [isSelectedIn, setIsSelectedExisting] = useState<boolean>(false);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  /**
+   * I point to specific exchange (Binance) to get asset pairs.
+   * In the future, It can be changed to get asset pairs from all exchanges or just from one.
+   * */
+  const exchange = EXCHANGE_LIST_DATA[0];
 
   const getAssetPairs = (): void => {
-    setIsLoading(true);
-    setIsSelectedExisting(false);
+    dispatch(setIsLoading(true));
+    dispatch(setIsSelectedExisting(false));
 
     axiosInstance
       .get(`${exchange.api.url}${exchange.api.exchangeInfo.path}`)
@@ -49,18 +65,26 @@ const AssetListSearch: FC<AssetListSearchProps> = ({
               quoteAsset: symbol.quoteAsset.toUpperCase(),
             };
 
-            if (currentAssetPair.symbol === assetPair.symbol) {
-              setIsSelectedExisting(true);
+            if (currencySymbol.symbol === assetPair.symbol) {
+              if (currencySymbol.symbol !== defaultCurrencySymbol) {
+                dispatch(
+                  setCurrencySymbol(
+                    currencySymbolToAssetPair(defaultCurrencySymbol)
+                  )
+                );
+              }
+
+              dispatch(setIsSelectedExisting(true));
             }
 
             return assetPair;
           });
 
-          setAssetPairs(assetSymbols);
+          dispatch(setAssetPairs(assetSymbols));
         }
       })
       .finally(() => {
-        setIsLoading(false);
+        dispatch(setIsLoading(false));
       });
   };
 
@@ -94,32 +118,23 @@ const AssetListSearch: FC<AssetListSearchProps> = ({
      * No point here to verify that selected asset pair is in the list of asset pairs.
      * UI element is AutoComplete, so user can't enter any value. This is why we don't need to verify.
      * */
-
     const assetPairsParsed = value.split('/');
 
-    setIsSelectedExisting(true);
-    onAssetPairChange(value, true);
-    setCurrentAssetPair({
+    const newCurrencySymbol = {
       symbol: value,
       baseAsset: assetPairsParsed[0],
       quoteAsset: assetPairsParsed[1],
-    });
-  };
+    };
 
-  useEffect(() => {
-    onAssetPairChange(currentAssetPair.symbol, isSelectedIn);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assetPairs, currentAssetPair.symbol, isSelectedIn]);
+    dispatch(setIsSelectedExisting(true));
+    dispatch(setCurrencySymbol(newCurrencySymbol));
+    onAssetPairChange(newCurrencySymbol, true);
+  };
 
   useEffect(() => {
     getAssetPairs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    searchResult();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assetPairs]);
 
   return (
     <div className={`asset-list-search ${className}`}>
@@ -127,7 +142,7 @@ const AssetListSearch: FC<AssetListSearchProps> = ({
         dropdownMatchSelectWidth={252}
         style={{ width: 300 }}
         options={options}
-        defaultValue={defaultPair}
+        defaultValue={defaultCurrencySymbol}
         onSelect={onSelect}
         onSearch={handleSearch}
         disabled={!assetPairs.length}
@@ -138,11 +153,11 @@ const AssetListSearch: FC<AssetListSearchProps> = ({
               {isLoading ? (
                 <LoadingOutlined />
               ) : (
-                currentAssetPair &&
-                isSelectedIn && (
+                currencySymbol &&
+                isSelectedExisting && (
                   <>
-                    <AssetSymbolImg assetSymbol={currentAssetPair.baseAsset} />
-                    <AssetSymbolImg assetSymbol={currentAssetPair.quoteAsset} />
+                    <AssetSymbolImg assetSymbol={currencySymbol.baseAsset} />
+                    <AssetSymbolImg assetSymbol={currencySymbol.quoteAsset} />
                   </>
                 )
               )}
@@ -157,4 +172,4 @@ const AssetListSearch: FC<AssetListSearchProps> = ({
   );
 };
 
-export default AssetListSearch;
+export default AssetSearch;
